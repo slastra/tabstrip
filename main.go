@@ -1,4 +1,4 @@
-// tabstrip drives a kitty-style browser tab strip in waybar, fed by tabctl's
+// tabstrip drives a browser tab strip in waybar, fed by tabctl's
 // D-Bus mediator. Successor to the firefox_tabs.py daemon: native D-Bus and
 // Hyprland IPC, no subprocess spawns on the hot path.
 //
