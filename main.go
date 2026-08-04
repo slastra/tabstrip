@@ -149,7 +149,8 @@ func daemon(c *TabCtl) {
 		}
 	}()
 
-	// Future push path: tabctl TabsUpdated signal (no-op until it exists).
+	// Push path: tabctl's TabsUpdated signal (mediator >= 2.1). No-op on
+	// older mediators, which just fall back to the poll below.
 	if sig, err := c.SubscribeTabsUpdated(); err == nil {
 		go func() {
 			for range sig {

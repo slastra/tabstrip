@@ -64,9 +64,9 @@ func (c *TabCtl) ActivateTab(tabID int32) error {
 	return c.obj().CallWithContext(ctx, dbusInterface+".ActivateTab", 0, tabID, true).Err
 }
 
-// SubscribeTabsUpdated registers interest in the (future) TabsUpdated signal.
-// tabctl's mediator does not emit it yet; when it grows one, refreshes become
-// push-driven with no code change here. Returns the signal channel.
+// SubscribeTabsUpdated registers interest in tabctl's TabsUpdated signal
+// (mediator >= 2.1). On older mediators the signal never arrives and the
+// daemon's fallback poll covers refreshes instead. Returns the signal channel.
 func (c *TabCtl) SubscribeTabsUpdated() (chan *dbus.Signal, error) {
 	if err := c.conn.AddMatchSignal(
 		dbus.WithMatchInterface(dbusInterface),
