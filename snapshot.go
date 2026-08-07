@@ -38,19 +38,41 @@ type Entry struct {
 	Active bool   `json:"active"`
 }
 
-// pickWindow resolves which Firefox window the strip should show: the focused
-// one, matched by active-tab title, or nothing when Firefox isn't focused.
-// Showing only the focused window guarantees a chip click never activates a
-// tab in some other window. tabctl exposes no focused-window signal, so the
-// match is by title: exact against the page part of the window title first,
-// then longest active-tab title contained in the full window title. No match
-// (title lag mid-navigation) renders empty rather than guessing.
-func pickWindow(tabs []TabInfo) (int32, bool) {
-	class, title := activeWindow()
-	if !strings.Contains(strings.ToLower(class), "firefox") || title == "" {
-		return 0, false
+// pickWindows resolves which browser windows the strip should show: every one
+// on the focused workspace, in on-screen order.
+//
+// Workspace rather than focused-window scope means a chip is always something
+// you can currently see, which is the property worth keeping — clicking one
+// can't drag you to a tab on a workspace you've left. It also keeps the strip
+// populated while a terminal or editor has focus, which the focused-window
+// version could not.
+//
+// tabctl exposes no window-identity signal, so Hyprland windows are mapped to
+// tabctl window IDs by title: exact against the page part of the window title
+// first, then the longest active-tab title contained in it. A window that
+// matches nothing (title lag mid-navigation) is skipped rather than guessed at.
+func pickWindows(tabs []TabInfo, browser string) []int32 {
+	match := strings.ToLower(baseBrowser(browser))
+	if match == "" {
+		match = "firefox"
 	}
 
+	var ids []int32
+	seen := map[int32]bool{}
+	for _, c := range clientsOnActiveWorkspace() {
+		if !strings.Contains(strings.ToLower(c.Class), match) || c.Title == "" {
+			continue
+		}
+		if id, ok := windowForTitle(tabs, c.Title); ok && !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// windowForTitle maps one Hyprland window title back to a tabctl window ID.
+func windowForTitle(tabs []TabInfo, title string) (int32, bool) {
 	// "<page title> — Mozilla Firefox", plus " (Private Browsing)" in
 	// private windows.
 	page := title
@@ -124,17 +146,20 @@ func writeSnapshot(c *TabCtl) bool {
 	EnsureChips(iconDir(), tabs)
 	EnsureBrowserChip(iconDir(), c.browser)
 
+	// Group by window in on-screen order, tabs within a window in tab-bar
+	// order, so the strip reads the way the screen looks.
 	var shown []TabInfo
-	if windowID, ok := pickWindow(tabs); ok {
-		for _, t := range tabs {
-			if t.WindowID == windowID {
-				shown = append(shown, t)
-			}
-		}
-		sort.Slice(shown, func(i, j int) bool { return shown[i].Index < shown[j].Index })
-		if len(shown) > maxSlots {
-			shown = shown[:maxSlots]
-		}
+	byWindow := map[int32][]TabInfo{}
+	for _, t := range tabs {
+		byWindow[t.WindowID] = append(byWindow[t.WindowID], t)
+	}
+	for _, id := range pickWindows(tabs, c.browser) {
+		w := byWindow[id]
+		sort.Slice(w, func(i, j int) bool { return w[i].Index < w[j].Index })
+		shown = append(shown, w...)
+	}
+	if len(shown) > maxSlots {
+		shown = shown[:maxSlots]
 	}
 
 	cap := charBudget / max(1, len(shown))

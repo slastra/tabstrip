@@ -31,24 +31,70 @@ func hyprEvents() (net.Conn, error) {
 	return net.DialTimeout("unix", filepath.Join(hyprDir(), ".socket2.sock"), 2*time.Second)
 }
 
-// activeWindow queries Hyprland's request socket for the focused window's
-// class and title (replaces shelling out to `hyprctl activewindow -j`).
-func activeWindow() (class, title string) {
+// hyprRequest issues one request on Hyprland's request socket and decodes the
+// JSON reply into v. Replaces shelling out to hyprctl.
+func hyprRequest(req string, v any) error {
 	conn, err := net.DialTimeout("unix", filepath.Join(hyprDir(), ".socket.sock"), 2*time.Second)
 	if err != nil {
-		return "", ""
+		return err
 	}
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(2 * time.Second))
-	if _, err := conn.Write([]byte("j/activewindow")); err != nil {
-		return "", ""
+	if _, err := conn.Write([]byte(req)); err != nil {
+		return err
 	}
+	return json.NewDecoder(conn).Decode(v)
+}
+
+// activeWindow returns the focused window's class and title.
+func activeWindow() (class, title string) {
 	var aw struct {
 		Class string `json:"class"`
 		Title string `json:"title"`
 	}
-	if err := json.NewDecoder(conn).Decode(&aw); err != nil {
+	if err := hyprRequest("j/activewindow", &aw); err != nil {
 		return "", ""
 	}
 	return aw.Class, aw.Title
+}
+
+// HyprClient is the subset of a Hyprland client the strip needs.
+type HyprClient struct {
+	Class     string `json:"class"`
+	Title     string `json:"title"`
+	At        [2]int `json:"at"`
+	Workspace struct {
+		ID int `json:"id"`
+	} `json:"workspace"`
+}
+
+// clientsOnActiveWorkspace returns the windows on the focused workspace,
+// ordered left to right then top to bottom, so chips read in the same order
+// the windows are arranged on screen.
+func clientsOnActiveWorkspace() []HyprClient {
+	var ws struct {
+		ID int `json:"id"`
+	}
+	if err := hyprRequest("j/activeworkspace", &ws); err != nil {
+		return nil
+	}
+
+	var all []HyprClient
+	if err := hyprRequest("j/clients", &all); err != nil {
+		return nil
+	}
+
+	var on []HyprClient
+	for _, c := range all {
+		if c.Workspace.ID == ws.ID {
+			on = append(on, c)
+		}
+	}
+	sort.Slice(on, func(i, j int) bool {
+		if on[i].At[0] != on[j].At[0] {
+			return on[i].At[0] < on[j].At[0]
+		}
+		return on[i].At[1] < on[j].At[1]
+	})
+	return on
 }
