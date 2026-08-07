@@ -22,15 +22,13 @@ import (
 	"time"
 )
 
-const browser = "Firefox"
-
 func main() {
 	mode := "snapshot"
 	if len(os.Args) > 1 {
 		mode = os.Args[1]
 	}
 
-	c, err := NewTabCtl(browser)
+	c, err := NewFleet()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "session bus unavailable:", err)
 		os.Exit(1)
@@ -56,30 +54,17 @@ func main() {
 	}
 }
 
-// activateID parses "firefox.<window>.<tab>" and activates the tab.
-func activateID(c *TabCtl, id string) {
-	parts := strings.Split(id, ".")
-	if len(parts) != 3 {
-		return
-	}
-	tabID, err := strconv.Atoi(parts[2])
-	if err != nil {
-		return
-	}
-	c.ActivateTab(int32(tabID))
-}
-
-func gotoSlot(c *TabCtl, n int) {
+func gotoSlot(c *Fleet, n int) {
 	tabs := readSnapshot()
 	if n >= 1 && n <= len(tabs) {
-		activateID(c, tabs[n-1].ID)
+		c.Activate(tabs[n-1].ID)
 		if writeSnapshot(c) {
 			pokeSlots()
 		}
 	}
 }
 
-func cycle(c *TabCtl, step int) {
+func cycle(c *Fleet, step int) {
 	tabs := readSnapshot()
 	active := -1
 	for i, t := range tabs {
@@ -91,7 +76,7 @@ func cycle(c *TabCtl, step int) {
 	if active < 0 || len(tabs) < 2 {
 		return
 	}
-	activateID(c, tabs[(active+step+len(tabs))%len(tabs)].ID)
+	c.Activate(tabs[(active+step+len(tabs))%len(tabs)].ID)
 	if writeSnapshot(c) {
 		pokeSlots()
 	}
@@ -108,7 +93,7 @@ func replacePriorInstance() {
 	os.WriteFile(pidfile, []byte(strconv.Itoa(os.Getpid())), 0o644)
 }
 
-func daemon(c *TabCtl) {
+func daemon(c *Fleet) {
 	replacePriorInstance()
 
 	// Hidden waybar module expects one line of module JSON.

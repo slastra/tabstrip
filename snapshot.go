@@ -51,33 +51,91 @@ type Entry struct {
 // tabctl window IDs by title: exact against the page part of the window title
 // first, then the longest active-tab title contained in it. A window that
 // matches nothing (title lag mid-navigation) is skipped rather than guessed at.
-func pickWindows(tabs []TabInfo, browser string) []int32 {
-	match := strings.ToLower(baseBrowser(browser))
-	if match == "" {
-		match = "firefox"
-	}
+// windowTitleSuffixes are the browser-name tails appended to window titles.
+// Longest first, so " — Mozilla Firefox" is not shadowed by a shorter match.
+var windowTitleSuffixes = []string{
+	" — Mozilla Firefox",
+	" - Google Chrome",
+	" - Chromium",
+	" - Brave",
+	" — Zen Browser",
+	" - Helium",
+}
 
-	var ids []int32
-	seen := map[int32]bool{}
+// winKey identifies a browser window. The window ID alone is not enough once
+// more than one browser is connected: Firefox and Chrome number their windows
+// independently and will collide.
+type winKey struct {
+	Browser  string
+	WindowID int32
+}
+
+func pickWindows(tabs []Tab) []winKey {
+	var keys []winKey
+	seen := map[winKey]bool{}
+
 	for _, c := range clientsOnActiveWorkspace() {
-		if !strings.Contains(strings.ToLower(c.Class), match) || c.Title == "" {
+		if c.Title == "" {
 			continue
 		}
-		if id, ok := windowForTitle(tabs, c.Title); ok && !seen[id] {
-			seen[id] = true
-			ids = append(ids, id)
+		class := strings.ToLower(c.Class)
+
+		// Narrow to the browsers whose name appears in this window's class,
+		// then identify the window among that browser's tabs. Matching the
+		// class first keeps a Chrome window from being resolved against a
+		// Firefox tab that happens to share a title.
+		for _, browser := range browsersInClass(tabs, class) {
+			var owned []Tab
+			for _, t := range tabs {
+				if t.Browser == browser {
+					owned = append(owned, t)
+				}
+			}
+			if id, ok := windowForTitle(owned, c.Title); ok {
+				k := winKey{Browser: browser, WindowID: id}
+				if !seen[k] {
+					seen[k] = true
+					keys = append(keys, k)
+				}
+				break
+			}
 		}
 	}
-	return ids
+	return keys
+}
+
+// browsersInClass returns the connected browsers whose base name appears in a
+// window class, e.g. "google-chrome" matches Chrome and Chrome2. Profiles of
+// one browser share a class, so both are returned and the title decides.
+func browsersInClass(tabs []Tab, class string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, t := range tabs {
+		if seen[t.Browser] {
+			continue
+		}
+		base := strings.ToLower(baseBrowser(t.Browser))
+		if base != "" && strings.Contains(class, base) {
+			seen[t.Browser] = true
+			out = append(out, t.Browser)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // windowForTitle maps one Hyprland window title back to a tabctl window ID.
-func windowForTitle(tabs []TabInfo, title string) (int32, bool) {
-	// "<page title> — Mozilla Firefox", plus " (Private Browsing)" in
-	// private windows.
+func windowForTitle(tabs []Tab, title string) (int32, bool) {
+	// Browsers append their own name to the window title: Firefox uses
+	// " — Mozilla Firefox" (plus " (Private Browsing)"), Chrome and its
+	// relatives " - Google Chrome". Strip whichever suffix is present so the
+	// remainder can be compared to a tab title exactly.
 	page := title
-	if i := strings.LastIndex(page, " — Mozilla Firefox"); i >= 0 {
-		page = page[:i]
+	for _, suffix := range windowTitleSuffixes {
+		if i := strings.LastIndex(page, suffix); i >= 0 {
+			page = page[:i]
+			break
+		}
 	}
 
 	var best int32
@@ -133,28 +191,34 @@ func truncate(title string, cap int) string {
 }
 
 // writeSnapshot refreshes the snapshot file; reports whether it changed.
-func writeSnapshot(c *TabCtl) bool {
-	tabs, err := c.ListTabs()
-	if err != nil {
-		tabs = nil // mediator down (browser closed, boot race): render empty, keep running
-	}
+func writeSnapshot(f *Fleet) bool {
+	tabs := f.ListAll()
 
-	// Cache chips for every tab in the browser, not just the window being
-	// rendered: switching windows should find its icons already there. Runs in
-	// the background, so this snapshot uses whatever is on disk now and the
-	// next one picks up the rest.
-	EnsureChips(iconDir(), tabs)
-	EnsureBrowserChip(iconDir(), c.browser)
+	// Cache chips for every tab of every browser, not just the windows being
+	// rendered: switching windows or workspaces should find its icons already
+	// there. Runs in the background, so this snapshot uses whatever is on disk
+	// now and the next one picks up the rest.
+	infos := make([]TabInfo, len(tabs))
+	browsers := map[string]bool{}
+	for i, t := range tabs {
+		infos[i] = t.TabInfo
+		browsers[t.Browser] = true
+	}
+	EnsureChips(iconDir(), infos)
+	for b := range browsers {
+		EnsureBrowserChip(iconDir(), b)
+	}
 
 	// Group by window in on-screen order, tabs within a window in tab-bar
 	// order, so the strip reads the way the screen looks.
-	var shown []TabInfo
-	byWindow := map[int32][]TabInfo{}
+	var shown []Tab
+	byWindow := map[winKey][]Tab{}
 	for _, t := range tabs {
-		byWindow[t.WindowID] = append(byWindow[t.WindowID], t)
+		k := winKey{Browser: t.Browser, WindowID: t.WindowID}
+		byWindow[k] = append(byWindow[k], t)
 	}
-	for _, id := range pickWindows(tabs, c.browser) {
-		w := byWindow[id]
+	for _, k := range pickWindows(tabs) {
+		w := byWindow[k]
 		sort.Slice(w, func(i, j int) bool { return w[i].Index < w[j].Index })
 		shown = append(shown, w...)
 	}
@@ -167,9 +231,9 @@ func writeSnapshot(c *TabCtl) bool {
 	entries := make([]Entry, 0, len(shown))
 	for i, t := range shown {
 		entries = append(entries, Entry{
-			ID:     t.ID(c.browser),
+			ID:     t.ID(t.Browser),
 			Label:  html.EscapeString(strconv.Itoa(i+1) + " " + truncate(cleanTitle(t.Title), cap)),
-			Icon:   iconFor(t.FavIconURL, c.browser, t.Active),
+			Icon:   iconFor(t.FavIconURL, t.Browser, t.Active),
 			Active: t.Active,
 		})
 	}
