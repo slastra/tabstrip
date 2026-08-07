@@ -1,24 +1,38 @@
 # tabstrip
 
-A browser tab strip for [waybar](https://github.com/Alexays/Waybar), fed by [tabctl](https://github.com/slastra/tabctl). Shows the focused Firefox window's tabs as clickable chips in a bar. Click to activate, scroll to cycle. When Firefox isn't focused the strip is empty, so a chip click can never activate a tab in a window other than the one you're looking at.
+A browser tab strip for [waybar](https://github.com/Alexays/Waybar), fed by
+[tabctl](https://github.com/slastra/tabctl). It shows the tabs of every browser
+window on the current workspace as clickable chips. Each chip carries the site
+favicon. Click a chip to activate the tab. Scroll to cycle.
 
-Built for Hyprland. One small Go binary, no runtime dependencies beyond tabctl itself.
+The strip is scoped to the workspace, not to the focused window. Every chip is
+therefore a tab you can currently see, and the strip stays populated while a
+terminal or an editor has focus. Windows are ordered by screen position. Tabs
+are ordered by tab-bar position.
+
+Built for Hyprland. One Go binary. No runtime dependencies beyond tabctl.
 
 ## How it works
 
 ```
-browser extension → tabctl-mediator → D-Bus → tabstrip daemon → snapshot JSON → waybar slots
+browser extension → tabctl-mediator → D-Bus → tabstrip daemon → snapshot JSON → waybar
 ```
 
-The daemon listens for tabctl's `TabsUpdated` D-Bus signal (tabctl >= 2.1) and Hyprland's window events, then rewrites a snapshot file and pokes waybar with `SIGRTMIN+8`. Waybar renders up to 10 static `custom/` slot modules from that snapshot. On older tabctl versions without the signal, a 1.5s fallback poll covers changes.
+The daemon listens for tabctl's `TabsUpdated` D-Bus signal and for Hyprland
+window events. It then rewrites the snapshot file and signals waybar with
+`SIGRTMIN+8`. If the D-Bus signal is unavailable, the daemon polls every 1.5s.
 
-Tab updates land in the bar roughly half a second after they happen in the browser, most of that being deliberate debounce.
+Tab changes reach the bar in about half a second. Most of that is deliberate
+debounce.
 
 ## Requirements
 
-- [tabctl](https://github.com/slastra/tabctl) with its browser extension installed and working (`tabctl list` shows your tabs)
+- [tabctl](https://github.com/slastra/tabctl) 2.2.0 or newer, with its browser
+  extension installed. Run `tabctl list` to confirm it works. Both halves must
+  be 2.2.0: the strip reads favicons through `ListTabsWithIcons`, and the
+  extension supplies `favIconUrl`. Run `tabctl status` to see both versions.
 - waybar
-- Hyprland (window focus tracking uses its IPC sockets)
+- Hyprland. Workspace and window queries use its IPC sockets.
 
 ## Install
 
@@ -26,7 +40,7 @@ Tab updates land in the bar roughly half a second after they happen in the brows
 go install github.com/slastra/tabstrip@latest
 ```
 
-Or clone and `go build`.
+Or clone the repository and run `go build`.
 
 ## Usage
 
@@ -40,7 +54,7 @@ tabstrip prev      cycle to the previous tab
 
 ## Waybar wiring
 
-A hidden driver module owns the daemon, and each visible slot renders one tab from the snapshot:
+A hidden driver module runs the daemon. An `image` module renders the chips.
 
 ```jsonc
 "custom/fftabsdrv": {
@@ -49,25 +63,49 @@ A hidden driver module owns the daemon, and each visible slot renders one tab fr
     "format": "{}",
     "tooltip": false
 },
-"custom/fftab1": {
-    "exec": "jq -cr '.tabs[0] // empty | {text: .label, class: (if .active then \"active\" else \"\" end)}' $XDG_RUNTIME_DIR/waybar-fftabs.json",
-    "return-type": "json",
+"image#fftabs": {
+    "exec": "jq -c '[.tabs | to_entries[] | {path: .value.icon, marker: (if .value.active then \"active\" else \"inactive\" end), tooltip: .value.label, \"on-click\": (\"tabstrip goto \" + ((.key+1)|tostring))}]' $XDG_RUNTIME_DIR/waybar-fftabs.json",
     "signal": 8,
-    "on-click": "tabstrip goto 1",
     "on-scroll-up": "tabstrip next",
     "on-scroll-down": "tabstrip prev"
-},
-// ...fftab2 through fftab10, same shape, next array index and goto number
+}
 ```
 
-Style the chips via `#custom-fftab1` etc. in `style.css`, with `.active` for the focused tab.
+The `image` module takes the chip count from the array, so per-tab slot modules
+are not needed. Waybar's image module has no CSS class states. The daemon
+therefore writes a dimmed copy beside each chip and selects between them.
+
+A text-only strip is still possible with `custom/` slot modules. Read
+`.tabs[N].label` in each module and set a class from `.tabs[N].active`. Those
+modules cannot show favicons.
+
+## Favicons
+
+Chips use the favicon the browser already resolved. tabstrip does not guess one
+from the domain and does not call a third-party icon service. Most favicons
+arrive as inline `data:` URIs, so the common case makes no network request.
+
+Decoding runs in-process. PNG, JPEG and GIF use the standard library. SVG is
+rasterised at 256px and downsampled. ICO is parsed directly, because ICO
+directory headers often disagree with their payloads. One favicon declared
+256x256 entries that held 16x16 PNGs. tabstrip therefore ignores the declared
+sizes, decodes every entry, and keeps the largest real one.
+
+A tab with no usable favicon falls back to its browser icon, so rows stay
+aligned. tabstrip records a failure for six hours instead of retrying it on
+every tab event.
+
+The daemon owns the cache and writes chips as tabs appear. Other tools can read
+the same files. Each chip is named `<sha256(favIconUrl)[:16]>-processed.png`
+and is 64x64 with rounded corners.
 
 ## Files
 
 | Path | Purpose |
 | --- | --- |
-| `$XDG_RUNTIME_DIR/waybar-fftabs.json` | snapshot the slots render from |
+| `$XDG_RUNTIME_DIR/waybar-fftabs.json` | snapshot the chips render from |
 | `$XDG_RUNTIME_DIR/waybar-fftabs.pid` | daemon pidfile, newer instances replace older ones |
+| `$XDG_CACHE_HOME/tabctl/favicons/` | favicon chips, written by the daemon, readable by other tools |
 
 ## License
 
