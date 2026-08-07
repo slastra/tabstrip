@@ -104,3 +104,20 @@ func TestWindowForTitleStripsBrowserSuffix(t *testing.T) {
 		}
 	}
 }
+
+func TestMaxTabs(t *testing.T) {
+	if got := maxTabs(); got != defaultMaxTabs {
+		t.Errorf("unset = %d, want the default %d", got, defaultMaxTabs)
+	}
+	t.Setenv("TABSTRIP_MAX_TABS", "24")
+	if got := maxTabs(); got != 24 {
+		t.Errorf("override = %d, want 24", got)
+	}
+	// Junk must not blank the strip.
+	for _, bad := range []string{"0", "-3", "lots", ""} {
+		t.Setenv("TABSTRIP_MAX_TABS", bad)
+		if got := maxTabs(); got != defaultMaxTabs {
+			t.Errorf("%q = %d, want the default %d", bad, got, defaultMaxTabs)
+		}
+	}
+}

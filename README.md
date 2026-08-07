@@ -99,6 +99,23 @@ The daemon owns the cache and writes chips as tabs appear. Other tools can read
 the same files. Each chip is named `<sha256(favIconUrl)[:16]>-processed.png`
 and is 64x64 with rounded corners.
 
+## Configuration
+
+There is no config file. The two values worth changing are environment
+variables, set on the waybar `exec` line that already starts the daemon.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `TABSTRIP_MAX_TABS` | 16 | chips to render before truncating |
+| `TABSTRIP_ICON_DIR` | `$XDG_CACHE_HOME/tabctl/favicons` | favicon cache location |
+
+```jsonc
+"custom/fftabsdrv": { "exec": "TABSTRIP_MAX_TABS=24 tabstrip daemon", ... }
+```
+
+How many chips fit depends on your screen width, so raise the cap if the strip
+stops short of the tabs you have open. Tabs past the cap are dropped silently.
+
 ## Files
 
 | Path | Purpose |

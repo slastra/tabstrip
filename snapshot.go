@@ -13,7 +13,9 @@ import (
 )
 
 const (
-	maxSlots = 10
+	// defaultMaxTabs caps the chips rendered. Screen width is the real
+	// constraint, so this is a default rather than a limit: see maxTabs.
+	defaultMaxTabs = 16
 	// Titles are capped per-tab from a shared character budget, so chips fit
 	// their text: few tabs → long titles, many tabs → tighter truncation.
 	charBudget = 300
@@ -29,6 +31,23 @@ func runtimeDir() string {
 }
 
 func snapshotPath() string { return filepath.Join(runtimeDir(), "waybar-fftabs.json") }
+
+// maxTabs is how many chips the strip renders before truncating. How many fit
+// depends on screen width and bar layout, which is machine-specific, so it is
+// overridable from the waybar exec line rather than compiled in:
+//
+//	"exec": "TABSTRIP_MAX_TABS=24 tabstrip daemon"
+//
+// A value that does not parse, or is not positive, falls back to the default
+// rather than rendering an empty strip.
+func maxTabs() int {
+	if v := os.Getenv("TABSTRIP_MAX_TABS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return defaultMaxTabs
+}
 
 // Entry is one rendered chip in the snapshot consumed by the waybar slots.
 type Entry struct {
@@ -222,8 +241,8 @@ func writeSnapshot(f *Fleet) bool {
 		sort.Slice(w, func(i, j int) bool { return w[i].Index < w[j].Index })
 		shown = append(shown, w...)
 	}
-	if len(shown) > maxSlots {
-		shown = shown[:maxSlots]
+	if n := maxTabs(); len(shown) > n {
+		shown = shown[:n]
 	}
 
 	cap := charBudget / max(1, len(shown))
