@@ -34,6 +34,7 @@ func snapshotPath() string { return filepath.Join(runtimeDir(), "waybar-fftabs.j
 type Entry struct {
 	ID     string `json:"id"`
 	Label  string `json:"label"`
+	Icon   string `json:"icon,omitempty"`
 	Active bool   `json:"active"`
 }
 
@@ -116,6 +117,13 @@ func writeSnapshot(c *TabCtl) bool {
 		tabs = nil // mediator down (browser closed, boot race): render empty, keep running
 	}
 
+	// Cache chips for every tab in the browser, not just the window being
+	// rendered: switching windows should find its icons already there. Runs in
+	// the background, so this snapshot uses whatever is on disk now and the
+	// next one picks up the rest.
+	EnsureChips(iconDir(), tabs)
+	EnsureBrowserChip(iconDir(), c.browser)
+
 	var shown []TabInfo
 	if windowID, ok := pickWindow(tabs); ok {
 		for _, t := range tabs {
@@ -136,6 +144,7 @@ func writeSnapshot(c *TabCtl) bool {
 		entries = append(entries, Entry{
 			ID:     t.ID(c.browser),
 			Label:  html.EscapeString(strconv.Itoa(i+1) + " " + truncate(cleanTitle(t.Title), cap)),
+			Icon:   iconFor(t.FavIconURL, c.browser, t.Active),
 			Active: t.Active,
 		})
 	}
