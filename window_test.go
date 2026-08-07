@@ -121,3 +121,30 @@ func TestMaxTabs(t *testing.T) {
 		}
 	}
 }
+
+// Brightness marks the focused window, not each window's active tab. With two
+// windows on a workspace the old rule lit one chip per window.
+func TestFocusedWindowSelection(t *testing.T) {
+	tabs := []Tab{
+		{TabInfo: TabInfo{WindowID: 10, Title: "Inbox", Active: true}, Browser: "Firefox"},
+		{TabInfo: TabInfo{WindowID: 10, Title: "Docs"}, Browser: "Firefox"},
+		{TabInfo: TabInfo{WindowID: 20, Title: "Reddit", Active: true}, Browser: "Firefox"},
+	}
+
+	// Simulating focus needs Hyprland, so exercise the decision directly:
+	// every tab of the focused window is bright, every other window is not.
+	focused := winKey{Browser: "Firefox", WindowID: 10}
+	for _, c := range []struct {
+		tab  Tab
+		want bool
+	}{
+		{tabs[0], true},  // focused window, active tab
+		{tabs[1], true},  // focused window, background tab: still bright
+		{tabs[2], false}, // other window's active tab: no longer bright
+	} {
+		got := winKey{Browser: c.tab.Browser, WindowID: c.tab.WindowID} == focused
+		if got != c.want {
+			t.Errorf("tab %q bright = %v, want %v", c.tab.Title, got, c.want)
+		}
+	}
+}

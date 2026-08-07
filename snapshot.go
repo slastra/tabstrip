@@ -143,6 +143,27 @@ func browsersInClass(tabs []Tab, class string) []string {
 	return out
 }
 
+// focusedWindow resolves the currently focused Hyprland window to the browser
+// window it is, when it is a browser window at all.
+func focusedWindow(tabs []Tab) (winKey, bool) {
+	class, title := activeWindow()
+	if title == "" {
+		return winKey{}, false
+	}
+	for _, browser := range browsersInClass(tabs, strings.ToLower(class)) {
+		var owned []Tab
+		for _, t := range tabs {
+			if t.Browser == browser {
+				owned = append(owned, t)
+			}
+		}
+		if id, ok := windowForTitle(owned, title); ok {
+			return winKey{Browser: browser, WindowID: id}, true
+		}
+	}
+	return winKey{}, false
+}
+
 // windowForTitle maps one Hyprland window title back to a tabctl window ID.
 func windowForTitle(tabs []Tab, title string) (int32, bool) {
 	// Browsers append their own name to the window title: Firefox uses
@@ -245,14 +266,29 @@ func writeSnapshot(f *Fleet) bool {
 		shown = shown[:n]
 	}
 
+	// Brightness marks the window you are in, not the active tab of every
+	// window. With several browser windows on a workspace the old rule lit one
+	// chip per window, so "bright" stopped meaning anything. Now the focused
+	// window's tabs are full brightness and every other window recedes.
+	//
+	// When focus is on something that is not a browser, no window can claim
+	// the strip, so fall back to marking each window's active tab. Leaving
+	// everything dim would be the common case, since a terminal or editor
+	// usually has focus while you glance at the bar.
+	focused, hasFocus := focusedWindow(tabs)
+
 	cap := charBudget / max(1, len(shown))
 	cap = min(titleMax, max(titleMin, cap))
 	entries := make([]Entry, 0, len(shown))
 	for i, t := range shown {
+		bright := t.Active
+		if hasFocus {
+			bright = winKey{Browser: t.Browser, WindowID: t.WindowID} == focused
+		}
 		entries = append(entries, Entry{
 			ID:     t.ID(t.Browser),
 			Label:  html.EscapeString(strconv.Itoa(i+1) + " " + truncate(cleanTitle(t.Title), cap)),
-			Icon:   iconFor(t.FavIconURL, t.Browser, t.Active),
+			Icon:   iconFor(t.FavIconURL, t.Browser, bright),
 			Active: t.Active,
 		})
 	}

@@ -75,6 +75,12 @@ The `image` module takes the chip count from the array, so per-tab slot modules
 are not needed. Waybar's image module has no CSS class states. The daemon
 therefore writes a dimmed copy beside each chip and selects between them.
 
+Brightness marks the window you are in. Every tab of the focused browser window
+is bright and every other window on the workspace is dimmed, so the strip shows
+at a glance which chips belong to the window in front of you. When focus is on
+something that is not a browser, the daemon falls back to marking each window's
+active tab.
+
 A text-only strip is still possible with `custom/` slot modules. Read
 `.tabs[N].label` in each module and set a class from `.tabs[N].active`. Those
 modules cannot show favicons.

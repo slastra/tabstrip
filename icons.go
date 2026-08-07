@@ -12,16 +12,14 @@ import (
 	"strings"
 )
 
-// Favicons come from the rofi tab-switcher's cache, one
-// "<key>-processed.png" per icon (64x64, favicon on a white rounded square).
-// tabstrip only reads that cache — it never downloads — and derives what it
-// needs beside it: a dimmed variant per icon so inactive chips recede while
-// the active tab keeps the full-brightness icon (waybar image modules have no
-// CSS class states, so active/inactive is baked into the image), and a blank
-// rounded square for icons the cache hasn't met yet.
+// tabstrip writes the favicon cache (see favicon.go) and derives what the bar
+// needs beside each chip: a dimmed copy, so the windows you are not in recede
+// while the focused window stays at full brightness, and a blank rounded
+// square for icons that never resolved. Waybar's image module has no CSS class
+// states, so brightness is baked into the image rather than styled.
 
 const (
-	dimAlpha = 100 // out of 255; inactive chips recede, the active one pops
+	dimAlpha = 100 // out of 255; unfocused windows recede, the focused one pops
 
 	// Fallback geometry mirrors the rofi script's composite.
 	iconSize   = 64
@@ -58,12 +56,15 @@ func iconKey(favIconURL string) string {
 
 // iconFor returns the chip image for a tab: the cached favicon when one has
 // been fetched for that favicon URL, the generated fallback otherwise; dimmed
-// unless active. Empty string (no icon field in the snapshot) only when
+// unless bright. Empty string (no icon field in the snapshot) only when
 // generation fails.
+//
+// bright is decided by the caller rather than read off the tab. The strip
+// lights the focused window, not each window's active tab. See writeSnapshot.
 //
 // favIconURL is empty for tabs with no icon and on browser-internal pages,
 // which lands on the fallback exactly as an uncached icon does.
-func iconFor(favIconURL, browser string, active bool) string {
+func iconFor(favIconURL, browser string, bright bool) string {
 	dir := iconDir()
 
 	// An empty favIconURL is never cached under any key, so don't bother
@@ -79,7 +80,7 @@ func iconFor(favIconURL, browser string, active bool) string {
 			return ""
 		}
 	}
-	if active {
+	if bright {
 		return base
 	}
 	if dim, err := dimVariant(base); err == nil {
