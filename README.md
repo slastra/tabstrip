@@ -1,6 +1,6 @@
 # tabstrip
 
-A browser tab strip for [waybar](https://github.com/Alexays/Waybar), fed by [tabctl](https://github.com/slastra/tabctl). Shows the focused Firefox window's tabs as clickable chips in a bar. Click to activate, scroll to cycle.
+A browser tab strip for [waybar](https://github.com/Alexays/Waybar), fed by [tabctl](https://github.com/slastra/tabctl). Shows the focused Firefox window's tabs as clickable chips in a bar. Click to activate, scroll to cycle. When Firefox isn't focused the strip is empty, so a chip click can never activate a tab in a window other than the one you're looking at.
 
 Built for Hyprland. One small Go binary, no runtime dependencies beyond tabctl itself.
 
@@ -67,7 +67,6 @@ Style the chips via `#custom-fftab1` etc. in `style.css`, with `.active` for the
 | Path | Purpose |
 | --- | --- |
 | `$XDG_RUNTIME_DIR/waybar-fftabs.json` | snapshot the slots render from |
-| `$XDG_RUNTIME_DIR/waybar-fftabs.window` | last focused browser window, keeps the strip populated while other apps have focus |
 | `$XDG_RUNTIME_DIR/waybar-fftabs.pid` | daemon pidfile, newer instances replace older ones |
 
 ## License

@@ -5,6 +5,7 @@ import (
 	"html"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,7 +18,7 @@ const (
 	// their text: few tabs → long titles, many tabs → tighter truncation.
 	charBudget = 300
 	titleMin   = 16
-	titleMax   = 64
+	titleMax   = 40
 )
 
 func runtimeDir() string {
@@ -28,7 +29,6 @@ func runtimeDir() string {
 }
 
 func snapshotPath() string { return filepath.Join(runtimeDir(), "waybar-fftabs.json") }
-func statePath() string    { return filepath.Join(runtimeDir(), "waybar-fftabs.window") }
 
 // Entry is one rendered chip in the snapshot consumed by the waybar slots.
 type Entry struct {
@@ -38,39 +38,63 @@ type Entry struct {
 }
 
 // pickWindow resolves which Firefox window the strip should show: the focused
-// one when Firefox is focused (matched by active-tab title), else the last
-// remembered window, else the lowest window ID.
+// one, matched by active-tab title, or nothing when Firefox isn't focused.
+// Showing only the focused window guarantees a chip click never activates a
+// tab in some other window. tabctl exposes no focused-window signal, so the
+// match is by title: exact against the page part of the window title first,
+// then longest active-tab title contained in the full window title. No match
+// (title lag mid-navigation) renders empty rather than guessing.
 func pickWindow(tabs []TabInfo) (int32, bool) {
-	windowSet := map[int32]bool{}
-	for _, t := range tabs {
-		windowSet[t.WindowID] = true
-	}
-	if len(windowSet) == 0 {
+	class, title := activeWindow()
+	if !strings.Contains(strings.ToLower(class), "firefox") || title == "" {
 		return 0, false
 	}
 
-	class, title := activeWindow()
-	if strings.Contains(strings.ToLower(class), "firefox") && title != "" {
-		for _, t := range tabs {
-			if t.Active && t.Title != "" && strings.Contains(title, t.Title) {
-				os.WriteFile(statePath(), []byte(strconv.Itoa(int(t.WindowID))), 0o644)
-				return t.WindowID, true
-			}
-		}
+	// "<page title> — Mozilla Firefox", plus " (Private Browsing)" in
+	// private windows.
+	page := title
+	if i := strings.LastIndex(page, " — Mozilla Firefox"); i >= 0 {
+		page = page[:i]
 	}
 
-	if b, err := os.ReadFile(statePath()); err == nil {
-		if id, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil && windowSet[int32(id)] {
-			return int32(id), true
+	var best int32
+	bestLen := 0
+	for _, t := range tabs {
+		if !t.Active || t.Title == "" {
+			continue
+		}
+		if t.Title == page {
+			return t.WindowID, true
+		}
+		if len(t.Title) > bestLen && strings.Contains(title, t.Title) {
+			best, bestLen = t.WindowID, len(t.Title)
 		}
 	}
+	return best, bestLen > 0
+}
 
-	windows := make([]int, 0, len(windowSet))
-	for w := range windowSet {
-		windows = append(windows, int(w))
+// counterPrefix matches unread-count prefixes like "(741) ".
+var counterPrefix = regexp.MustCompile(`^\(\d+\)\s*`)
+
+// titleSeps are the separators sites put before their name in page titles.
+var titleSeps = []string{" — ", " – ", " - ", " | ", " · "}
+
+// cleanTitle drops chip noise from a tab title: a leading unread counter and
+// a trailing site-name segment ("… - YouTube"). The site segment is only cut
+// when what remains is long enough to stay recognizable and the tail is short
+// enough to look like a site name rather than content.
+func cleanTitle(title string) string {
+	title = strings.TrimSpace(counterPrefix.ReplaceAllString(title, ""))
+	cut, sepLen := -1, 0
+	for _, s := range titleSeps {
+		if i := strings.LastIndex(title, s); i > cut {
+			cut, sepLen = i, len(s)
+		}
 	}
-	sort.Ints(windows)
-	return int32(windows[0]), true
+	if cut >= 8 && len(title)-cut-sepLen <= 30 {
+		title = strings.TrimSpace(title[:cut])
+	}
+	return title
 }
 
 func truncate(title string, cap int) string {
@@ -111,7 +135,7 @@ func writeSnapshot(c *TabCtl) bool {
 	for i, t := range shown {
 		entries = append(entries, Entry{
 			ID:     t.ID(c.browser),
-			Label:  html.EscapeString(strconv.Itoa(i+1) + " " + truncate(t.Title, cap)),
+			Label:  html.EscapeString(strconv.Itoa(i+1) + " " + truncate(cleanTitle(t.Title), cap)),
 			Active: t.Active,
 		})
 	}
