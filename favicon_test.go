@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // pngBytes builds a solid square PNG of the given size.
@@ -87,9 +88,18 @@ func TestDecodeICOSurvivesOneBadEntry(t *testing.T) {
 	}
 }
 
+// webpFixture is a 24x24 lossy WebP. There is no WebP encoder in x/image (it
+// decodes only), so the bytes are baked in rather than generated.
+const webpFixture = "UklGRkYAAABXRUJQVlA4IDoAAAAwAwCdASoYABgAPpFCnEolo6KhqAgAsBIJZQDM/oAAQFBQAP7rNv/XwBT1R//OJfyR+gXmKetwAAAA"
+
 func TestDecodeIconFormats(t *testing.T) {
 	svg := []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">` +
 		`<rect x="0" y="0" width="32" height="32" fill="#ff0000"/></svg>`)
+
+	webp, err := base64.StdEncoding.DecodeString(webpFixture)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	cases := []struct {
 		name string
@@ -98,6 +108,7 @@ func TestDecodeIconFormats(t *testing.T) {
 		{"png", pngBytes(t, 32, color.RGBA{R: 255, A: 255})},
 		{"ico", buildICO(t, [][]byte{pngBytes(t, 32, color.RGBA{R: 255, A: 255})})},
 		{"svg", svg},
+		{"webp", webp},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -193,10 +204,16 @@ func TestEnsureChipsWritesAndNegativeCaches(t *testing.T) {
 		t.Error("chip was not written")
 	}
 
-	if err := ensureChip(dir, bad, iconKey(bad)); err == nil {
+	err := ensureChip(dir, bad, iconKey(bad))
+	if err == nil {
 		t.Error("undecodable icon should error")
 	}
-	markFailed(dir, iconKey(bad))
+	// Undecodable bytes are the icon's fault, not the network's: long TTL.
+	if got := failTTLFor(err); got != failTTL {
+		t.Errorf("failTTLFor(decode error) = %v, want %v", got, failTTL)
+	}
+
+	markFailed(dir, iconKey(bad), failTTLFor(err))
 	if !failedRecently(dir, iconKey(bad)) {
 		t.Error("failure marker should suppress retries")
 	}
@@ -205,9 +222,93 @@ func TestEnsureChipsWritesAndNegativeCaches(t *testing.T) {
 	}
 }
 
+// A network failure must not cost the icon the same six hours a broken one
+// does — the daemon starts with the session and routinely races DNS.
+func TestFailTTLDistinguishesTransient(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/gone"):
+			w.WriteHeader(http.StatusNotFound)
+		case strings.HasSuffix(r.URL.Path, "/oops"):
+			w.WriteHeader(http.StatusBadGateway)
+		case strings.HasSuffix(r.URL.Path, "/slow-down"):
+			w.WriteHeader(http.StatusTooManyRequests)
+		default:
+			w.WriteHeader(http.StatusForbidden)
+		}
+	}))
+	// Captured before Close so the dead-server case has somewhere to point.
+	dead := srv.URL + "/favicon.png"
+	defer srv.Close()
+
+	cases := []struct {
+		name string
+		url  string
+		want time.Duration
+	}{
+		{"404 is durable", srv.URL + "/gone", failTTL},
+		{"403 is durable", srv.URL + "/blocked", failTTL},
+		{"502 is transient", srv.URL + "/oops", transientFailTTL},
+		{"429 is transient", srv.URL + "/slow-down", transientFailTTL},
+		{"bad scheme is durable", "ftp://example.com/favicon.ico", failTTL},
+		{"malformed data URI is durable", "data:image/png;base64", failTTL},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := fetchIcon(c.url)
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			if got := failTTLFor(err); got != c.want {
+				t.Errorf("failTTLFor = %v, want %v", got, c.want)
+			}
+		})
+	}
+
+	// An unreachable host is the case this whole split exists for.
+	srv.Close()
+	if _, err := fetchIcon(dead); err == nil {
+		t.Fatal("expected an error from a closed server")
+	} else if got := failTTLFor(err); got != transientFailTTL {
+		t.Errorf("failTTLFor(unreachable) = %v, want %v", got, transientFailTTL)
+	}
+}
+
+func TestFailMarkerCarriesItsTTL(t *testing.T) {
+	dir := t.TempDir()
+
+	// A short-TTL marker expires without waiting out failTTL.
+	markFailed(dir, "transient", time.Nanosecond)
+	if failedRecently(dir, "transient") {
+		t.Error("a nanosecond-TTL marker should already have expired")
+	}
+	if exists(failMarker(dir, "transient")) {
+		t.Error("an expired marker should be removed, to allow one more attempt")
+	}
+
+	markFailed(dir, "durable", failTTL)
+	if !failedRecently(dir, "durable") {
+		t.Error("a fresh long-TTL marker should suppress retries")
+	}
+
+	// Markers predating the TTL-in-contents format are empty files, and must
+	// keep the long TTL they were written with.
+	if err := os.WriteFile(failMarker(dir, "legacy"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := markedTTL(dir, "legacy"); got != failTTL {
+		t.Errorf("markedTTL(empty marker) = %v, want %v", got, failTTL)
+	}
+	if !failedRecently(dir, "legacy") {
+		t.Error("an empty legacy marker should still suppress retries")
+	}
+}
+
 func TestFetchIconHTTP(t *testing.T) {
 	raw := pngBytes(t, 16, color.RGBA{B: 255, A: 255})
+	var gotUA, gotAccept string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUA, gotAccept = r.Header.Get("User-Agent"), r.Header.Get("Accept")
 		if strings.HasSuffix(r.URL.Path, "/missing.ico") {
 			w.WriteHeader(http.StatusNotFound)
 			return
@@ -219,6 +320,14 @@ func TestFetchIconHTTP(t *testing.T) {
 	got, err := fetchIcon(srv.URL + "/favicon.png")
 	if err != nil || !bytes.Equal(got, raw) {
 		t.Errorf("fetchIcon over http failed: err=%v", err)
+	}
+	// Go's default UA draws a 403 from enough WAFs to be worth pinning; a
+	// silent regression here reads as half the web having no favicon.
+	if strings.Contains(gotUA, "Go-http-client") || gotUA != fetchUserAgent {
+		t.Errorf("User-Agent = %q, want %q", gotUA, fetchUserAgent)
+	}
+	if !strings.Contains(gotAccept, "image/webp") {
+		t.Errorf("Accept = %q, want it to advertise the formats we decode", gotAccept)
 	}
 	if _, err := fetchIcon(srv.URL + "/missing.ico"); err == nil {
 		t.Error("404 should be an error, not an empty icon")

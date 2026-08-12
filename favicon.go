@@ -10,14 +10,15 @@ package main
 // the switcher.
 //
 // Everything is in-process: no ImageMagick, no exec. Go's stdlib covers
-// PNG/JPEG/GIF; ICO is parsed here (see decodeICO) and SVG is rasterised with
-// oksvg.
+// PNG/JPEG/GIF and x/image/webp the fourth raster format sites actually serve;
+// ICO is parsed here (see decodeICO) and SVG is rasterised with oksvg.
 
 import (
 	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -37,6 +38,7 @@ import (
 	"github.com/srwiley/oksvg"
 	"github.com/srwiley/rasterx"
 	xdraw "golang.org/x/image/draw"
+	_ "golang.org/x/image/webp"
 )
 
 const (
@@ -54,9 +56,32 @@ const (
 	fetchTimeout = 5 * time.Second
 	maxIconBytes = 2 << 20 // 2 MiB; favicons are kilobytes, this is a sanity bound
 
-	// failTTL suppresses retries of an icon that couldn't be fetched or
-	// decoded. Without it every tab event re-attempts every broken favicon.
+	// failTTL suppresses retries of an icon that is genuinely broken — it
+	// didn't decode, or the server says it isn't there. Without it every tab
+	// event re-attempts every broken favicon.
 	failTTL = 6 * time.Hour
+
+	// transientFailTTL is the same suppression for a failure the network is
+	// expected to recover from. The daemon starts with the session, so it
+	// routinely races DNS, a VPN, or wifi association; at the flat failTTL a
+	// single blip at login blanked every http-hosted favicon in the strip
+	// until the afternoon. Short enough to heal unnoticed, long enough that a
+	// genuinely unreachable host isn't retried every snapshot.
+	transientFailTTL = 5 * time.Minute
+
+	// fetchUserAgent identifies as Firefox ESR rather than as tabstrip.
+	//
+	// This asks for nothing the browser hasn't already asked for — we are
+	// re-fetching an icon the tab whose favicon this is has loaded already —
+	// but Go's default "Go-http-client/1.1" is on enough WAF blocklists to
+	// draw a 403, and a 403 used to cost the icon six hours. ESR is chosen
+	// over a mainline release so the version stays plausible for longer.
+	fetchUserAgent = "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0"
+
+	// fetchAccept advertises exactly the formats decodeIcon can read, so a
+	// server that content-negotiates doesn't hand back an AVIF we'd only
+	// throw away.
+	fetchAccept = "image/png,image/webp,image/svg+xml,image/x-icon,image/vnd.microsoft.icon,image/jpeg,image/gif,*/*;q=0.5"
 )
 
 // inFlight collapses concurrent work on the same icon: a burst of tab events
@@ -87,7 +112,7 @@ func EnsureChips(dir string, tabs []TabInfo) {
 		go func(favicon, key string) {
 			defer inFlight.Delete(key)
 			if err := ensureChip(dir, favicon, key); err != nil {
-				markFailed(dir, key)
+				markFailed(dir, key, failTTLFor(err))
 			}
 		}(t.FavIconURL, key)
 	}
@@ -107,6 +132,25 @@ func ensureChip(dir, favIconURL, key string) error {
 
 // --- fetch -----------------------------------------------------------------
 
+// transientErr marks a failure as worth retrying soon: the network was
+// unreachable or the server was briefly unwell, as opposed to the icon being
+// broken. Only the negative cache reads it, to pick a TTL — see failTTLFor.
+type transientErr struct{ err error }
+
+func (e transientErr) Error() string { return e.err.Error() }
+func (e transientErr) Unwrap() error { return e.err }
+
+// failTTLFor decides how long a failure suppresses retries of that icon.
+// Anything not explicitly marked transient is treated as durable, so a new
+// error path errs towards being quiet rather than towards hammering.
+func failTTLFor(err error) time.Duration {
+	var t transientErr
+	if errors.As(err, &t) {
+		return transientFailTTL
+	}
+	return failTTL
+}
+
 // fetchIcon resolves a favicon URL to bytes. Firefox reports most favicons as
 // inline data: URIs, so the common case never touches the network.
 func fetchIcon(favIconURL string) ([]byte, error) {
@@ -123,17 +167,27 @@ func fetchIcon(favIconURL string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	req.Header.Set("User-Agent", fetchUserAgent)
+	req.Header.Set("Accept", fetchAccept)
+
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, transientErr{err} // DNS, refused, timed out: try again soon
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("favicon fetch: HTTP %d", resp.StatusCode)
+		err := fmt.Errorf("favicon fetch: HTTP %d", resp.StatusCode)
+		// A server that answered has said something durable: a 404 means the
+		// icon the page declared isn't there and won't be in five minutes.
+		// 429 and 5xx are the server having a moment, so those come back.
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+			return nil, transientErr{err}
+		}
+		return nil, err
 	}
 	var buf bytes.Buffer
 	if _, err := buf.ReadFrom(io.LimitReader(resp.Body, maxIconBytes)); err != nil {
-		return nil, err
+		return nil, transientErr{err} // connection died mid-body
 	}
 	return buf.Bytes(), nil
 }
@@ -351,11 +405,14 @@ func inRounded(x, y, side, radius int) bool {
 
 func failMarker(dir, key string) string { return filepath.Join(dir, key+".fail") }
 
-func markFailed(dir, key string) {
+// markFailed records a failed icon so it isn't retried for ttl.
+//
+// The marker carries its own TTL as its contents rather than the TTL being a
+// constant read at check time: the two differ by two orders of magnitude, and
+// which one applies is known only here, at the point the error was classified.
+func markFailed(dir, key string, ttl time.Duration) {
 	_ = os.MkdirAll(dir, 0o755)
-	if f, err := os.Create(failMarker(dir, key)); err == nil {
-		f.Close()
-	}
+	_ = os.WriteFile(failMarker(dir, key), []byte(ttl.String()), 0o644)
 }
 
 func failedRecently(dir, key string) bool {
@@ -363,9 +420,24 @@ func failedRecently(dir, key string) bool {
 	if err != nil {
 		return false
 	}
-	if time.Since(fi.ModTime()) < failTTL {
+	if time.Since(fi.ModTime()) < markedTTL(dir, key) {
 		return true
 	}
 	os.Remove(failMarker(dir, key)) // expired; allow one more attempt
 	return false
+}
+
+// markedTTL reads back the TTL markFailed stored. An empty or unparseable
+// marker is one written before markers carried a TTL, and takes the long one —
+// that was the only behaviour those markers ever had.
+func markedTTL(dir, key string) time.Duration {
+	b, err := os.ReadFile(failMarker(dir, key))
+	if err != nil {
+		return failTTL
+	}
+	d, err := time.ParseDuration(strings.TrimSpace(string(b)))
+	if err != nil || d <= 0 {
+		return failTTL
+	}
+	return d
 }
