@@ -390,6 +390,27 @@ func TestFetchIconHTTP(t *testing.T) {
 	}
 }
 
+// An icon past the size cap must say so, rather than being truncated into
+// bytes that fail to decode and get blamed for being corrupt.
+func TestFetchIconRejectsOversizeWithoutTruncating(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(make([]byte, maxIconBytes+1))
+	}))
+	defer srv.Close()
+
+	got, err := fetchIcon(srv.URL + "/huge.png")
+	if err == nil {
+		t.Fatalf("oversize icon should error, got %d bytes", len(got))
+	}
+	if !strings.Contains(err.Error(), "larger than") {
+		t.Errorf("error = %v, want it to name the size as the reason", err)
+	}
+	// Size is a property of the icon, not of the network: don't retry in 5min.
+	if ttl := failTTLFor(err); ttl != failTTL {
+		t.Errorf("failTTLFor(oversize) = %v, want %v", ttl, failTTL)
+	}
+}
+
 func TestEnsureChipsSkipsCachedAndEmpty(t *testing.T) {
 	dir := t.TempDir()
 	raw := pngBytes(t, 16, color.RGBA{A: 255})

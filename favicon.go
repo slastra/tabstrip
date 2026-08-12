@@ -214,9 +214,16 @@ func fetchIcon(favIconURL string) ([]byte, error) {
 		}
 		return nil, err
 	}
+	// Read one byte past the cap so an oversized icon can be told apart from
+	// one that merely fills it. Truncating at the cap instead would hand the
+	// decoder half a file, and the resulting decode error would blame the
+	// icon for being corrupt when it is only too big.
 	var buf bytes.Buffer
-	if _, err := buf.ReadFrom(io.LimitReader(resp.Body, maxIconBytes)); err != nil {
+	if _, err := buf.ReadFrom(io.LimitReader(resp.Body, maxIconBytes+1)); err != nil {
 		return nil, transientErr{err} // connection died mid-body
+	}
+	if buf.Len() > maxIconBytes {
+		return nil, fmt.Errorf("favicon larger than %d bytes", maxIconBytes)
 	}
 	return buf.Bytes(), nil
 }
