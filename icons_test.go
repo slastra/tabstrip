@@ -10,10 +10,10 @@ import (
 	"testing"
 )
 
-// The rofi script computes this key in bash as
+// The rofi switcher looks chips up by recomputing this key in bash, as
 // `printf '%s' "$url" | sha256sum | cut -c1-16`. These expectations are the
 // output of that command, pinned here so a change to iconKey that silently
-// desyncs the two caches fails the build instead of blanking the waybar strip.
+// desyncs the two fails the build instead of blanking the switcher's icons.
 func TestIconKeyMatchesRofiScript(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"https://example.com/favicon.ico", "d3d39abc88b126ca"},
@@ -34,7 +34,7 @@ func TestIconFor(t *testing.T) {
 	const favicon = "https://example.com/favicon.ico"
 	cached := filepath.Join(dir, iconKey(favicon)+"-processed.png")
 
-	// Seed a cached favicon like the rofi script would leave.
+	// Seed a cached favicon, as EnsureChips would have left it.
 	src := image.NewRGBA(image.Rect(0, 0, iconSize, iconSize))
 	src.SetRGBA(10, 10, color.RGBA{R: 200, G: 100, B: 50, A: 255})
 	f, _ := os.Create(cached)
@@ -81,8 +81,8 @@ func TestIconFor(t *testing.T) {
 	}
 }
 
-// The rofi script composites "_fallback-<browser>.png" into the shared cache;
-// tabstrip must prefer it over the blank square, and must strip tabctl's
+// EnsureBrowserChip composites "_fallback-<browser>.png" into the cache;
+// iconFor must prefer it over the blank square, and must strip tabctl's
 // profile suffix so Chrome and Chrome2 share one chip.
 func TestFallbackPrefersBrowserChip(t *testing.T) {
 	dir := t.TempDir()

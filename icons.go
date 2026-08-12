@@ -17,6 +17,9 @@ import (
 // while the focused window stays at full brightness, and a blank rounded
 // square for icons that never resolved. Waybar's image module has no CSS class
 // states, so brightness is baked into the image rather than styled.
+//
+// The rofi tab switcher reads this cache but never writes it. Both used to
+// write, which is why the key format is pinned by a test (see iconKey).
 
 const (
 	// Out of 255. 255 is fully opaque, i.e. no dimming: every chip renders at
@@ -26,14 +29,16 @@ const (
 	// the effect is this one number (100 was the previous value).
 	dimAlpha = 255
 
-	// Fallback geometry mirrors the rofi script's composite.
+	// Fallback geometry matches a real chip's, so a tab that lands on the
+	// blank square doesn't visibly change size in the strip.
 	iconSize   = 64
 	iconMargin = 4
 	iconRadius = 8
 )
 
-// iconDir is shared with the rofi tab switcher, which populates it. Named for
-// tabctl rather than either consumer, since both read and write here.
+// iconDir is the chip cache. tabstrip writes it; the rofi tab switcher
+// (~/.config/rofi/scripts/tabs.sh) only reads it. Named for tabctl rather than
+// for either program, since it predates both owning it.
 func iconDir() string {
 	if d := os.Getenv("TABSTRIP_ICON_DIR"); d != "" {
 		return d
@@ -46,14 +51,12 @@ func iconDir() string {
 	return filepath.Join(base, "tabctl", "favicons")
 }
 
-// iconKey mirrors the rofi script's cache key: the first 16 hex chars of the
-// favicon URL's SHA-256.
+// iconKey names a chip: the first 16 hex chars of the favicon URL's SHA-256.
 //
-// KEEP IN SYNC with favicon_cache_path() in
-// ~/.config/rofi/rofi_tabctl_icons_hyprland.sh. The rofi script writes these
-// files and tabstrip only reads them, so a divergence here doesn't error —
-// every lookup just misses and the whole strip silently goes to blank
-// fallback squares.
+// KEEP IN SYNC with chip_for() in ~/.config/rofi/scripts/tabs.sh, which
+// recomputes the same key in bash to find the chips tabstrip left. A
+// divergence here doesn't error — the switcher's every lookup just misses and
+// its rows silently fall back to browser icons.
 func iconKey(favIconURL string) string {
 	sum := sha256.Sum256([]byte(favIconURL))
 	return hex.EncodeToString(sum[:])[:16]
@@ -95,7 +98,8 @@ func iconFor(favIconURL, browser string, bright bool) string {
 }
 
 // dimVariant returns "<base>-dim.png", regenerating it whenever the source
-// icon is newer (the rofi script may refresh a favicon in place).
+// icon is newer — a chip is rewritten after the cache is cleared, or after a
+// failure marker expires and the icon fetches successfully on the retry.
 func dimVariant(base string) (string, error) {
 	dim := strings.TrimSuffix(base, ".png") + "-dim.png"
 	bi, err := os.Stat(base)
@@ -123,12 +127,13 @@ func dimVariant(base string) (string, error) {
 }
 
 // fallbackFor picks the chip for a tab with no usable favicon: the owning
-// browser's icon when the rofi script has composited one into the shared
-// cache, else the blank square generated here.
+// browser's own icon when one has been composited into the cache, else the
+// blank square generated here.
 //
-// tabstrip deliberately doesn't build the browser chip itself — that needs
-// freedesktop icon-theme lookup and a rasteriser, both of which the rofi
-// script already has via ImageMagick. This only reads what it left.
+// EnsureBrowserChip (browsericon.go) is what composites it, on every snapshot,
+// so by the time a tab needs the fallback it is normally already there. The
+// blank square covers a browser with no icon installed under any name the
+// search path knows.
 func fallbackFor(dir, browser string) string {
 	if browser != "" {
 		p := filepath.Join(dir, "_fallback-"+strings.ToLower(baseBrowser(browser))+".png")

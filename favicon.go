@@ -44,8 +44,9 @@ import (
 const (
 	// chipInset leaves a little air around the icon inside the chip box.
 	chipInset = 4
-	// chipRadius rounds the icon's own corners. Must match what the rofi
-	// script produced, so a cache written by either looks the same.
+	// chipRadius rounds the icon's own corners. Shared with the rofi
+	// switcher's rows, which render these same files, so changing it changes
+	// both surfaces at once.
 	chipRadius = 10
 
 	// svgRaster is the square an SVG is rasterised into before downsampling.
