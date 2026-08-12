@@ -50,10 +50,15 @@ func TestIconFor(t *testing.T) {
 	if !strings.HasSuffix(inactive, iconKey(favicon)+"-processed-dim.png") {
 		t.Fatalf("inactive icon = %q", inactive)
 	}
+	// The dim variant is still generated and still selected for unfocused
+	// windows; dimAlpha just sits at 255 now, so it comes out matching the
+	// bright one. Assert the alpha tracks the constant rather than pinning a
+	// particular look, so this keeps testing the compositing either way.
 	img := decode(t, inactive)
 	_, _, _, a := img.At(10, 10).RGBA()
-	if a == 0 || a >= 0xffff/2 {
-		t.Errorf("dim variant alpha = %#x, want reduced but nonzero", a)
+	wantA := uint32(dimAlpha) * 0x101
+	if a != wantA {
+		t.Errorf("dim variant alpha = %#x, want %#x (dimAlpha=%d)", a, wantA, dimAlpha)
 	}
 
 	// With no browser chip in the cache, an uncached favicon falls back to the

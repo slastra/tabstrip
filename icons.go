@@ -19,7 +19,12 @@ import (
 // states, so brightness is baked into the image rather than styled.
 
 const (
-	dimAlpha = 100 // out of 255; unfocused windows recede, the focused one pops
+	// Out of 255. 255 is fully opaque, i.e. no dimming: every chip renders at
+	// full brightness and the strip distinguishes the focused window by its
+	// border alone. The machinery is deliberately left intact rather than torn
+	// out — the dim variant is still written and still selected — so restoring
+	// the effect is this one number (100 was the previous value).
+	dimAlpha = 255
 
 	// Fallback geometry mirrors the rofi script's composite.
 	iconSize   = 64
