@@ -127,7 +127,35 @@ func ensureChip(dir, favIconURL, key string) error {
 	if err != nil {
 		return err
 	}
-	return writePNG(filepath.Join(dir, key+"-processed.png"), composeChip(img))
+	chip := composeChip(img)
+	if !visible(chip) {
+		return fmt.Errorf("icon rendered blank")
+	}
+	return writePNG(filepath.Join(dir, key+"-processed.png"), chip)
+}
+
+// visible reports whether an image has any pixel at all that would be drawn.
+//
+// A decode that succeeds and produces nothing is worse than one that fails.
+// A failure falls back to the browser chip; a blank chip gets written, cached,
+// and leaves a hole in the strip that reads as a bug in the bar rather than as
+// an icon we couldn't render.
+//
+// This is not hypothetical. oksvg draws neither <image> elements nor CSS from
+// a <style> block, and Gemini's favicon is a blurred raster clipped to a
+// vector path whose own fill is set to none by exactly such a block — so every
+// element in it is one oksvg skips, and it rasterises to 4096 transparent
+// pixels without ever erroring.
+func visible(img image.Image) bool {
+	b := img.Bounds()
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			if _, _, _, a := img.At(x, y).RGBA(); a != 0 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // --- fetch -----------------------------------------------------------------

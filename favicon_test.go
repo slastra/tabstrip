@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"image"
 	"image/color"
+	"image/draw"
 	"image/png"
 	"net/http"
 	"net/http/httptest"
@@ -301,6 +302,58 @@ func TestFailMarkerCarriesItsTTL(t *testing.T) {
 	}
 	if !failedRecently(dir, "legacy") {
 		t.Error("an empty legacy marker should still suppress retries")
+	}
+}
+
+// An SVG whose only artwork is an embedded raster, which is the shape of the
+// favicon Gemini serves. oksvg does not draw <image>, so this decodes without
+// error into a fully transparent raster — the case that used to be written to
+// the cache as a blank chip and leave a hole in the strip.
+func TestBlankRenderIsAFailure(t *testing.T) {
+	dir := t.TempDir()
+	inner := base64.StdEncoding.EncodeToString(pngBytes(t, 16, color.RGBA{R: 255, A: 255}))
+	svg := []byte(`<svg xmlns="http://www.w3.org/2000/svg" ` +
+		`xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 32 32">` +
+		`<image xlink:href="data:image/png;base64,` + inner + `" width="32" height="32"/></svg>`)
+
+	// It must still decode — the point is that it decodes to nothing.
+	img, err := decodeIcon(svg)
+	if err != nil {
+		t.Fatalf("decodeIcon: %v", err)
+	}
+	if visible(composeChip(img)) {
+		t.Skip("oksvg has gained <image> support; this case is no longer blank")
+	}
+
+	url := "data:image/svg+xml;base64," + base64.StdEncoding.EncodeToString(svg)
+	err = ensureChip(dir, url, iconKey(url))
+	if err == nil {
+		t.Fatal("a blank render should be an error, not a cached empty chip")
+	}
+	if exists(filepath.Join(dir, iconKey(url)+"-processed.png")) {
+		t.Error("a blank chip must not be written — iconFor would prefer it to the fallback")
+	}
+	// Deterministically blank, so it belongs in the long-TTL bucket.
+	if got := failTTLFor(err); got != failTTL {
+		t.Errorf("failTTLFor(blank render) = %v, want %v", got, failTTL)
+	}
+}
+
+func TestVisible(t *testing.T) {
+	blank := image.NewRGBA(image.Rect(0, 0, 8, 8))
+	if visible(blank) {
+		t.Error("a fully transparent image is not visible")
+	}
+	// A single non-transparent pixel is enough; icons are mostly transparent.
+	speck := image.NewRGBA(image.Rect(0, 0, 8, 8))
+	speck.SetRGBA(7, 7, color.RGBA{R: 1, A: 1})
+	if !visible(speck) {
+		t.Error("one non-transparent pixel should count as visible")
+	}
+	solid := image.NewRGBA(image.Rect(0, 0, 32, 32))
+	draw.Draw(solid, solid.Bounds(), image.NewUniform(color.RGBA{R: 255, A: 255}), image.Point{}, draw.Src)
+	if !visible(composeChip(solid)) {
+		t.Error("a solid source composed into a chip should be visible")
 	}
 }
 
