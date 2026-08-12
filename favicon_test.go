@@ -411,6 +411,26 @@ func TestFetchIconRejectsOversizeWithoutTruncating(t *testing.T) {
 	}
 }
 
+// The one-shot `tabstrip snapshot` relies on this: without it the process
+// exits before its own fetches land and warms almost nothing.
+func TestWaitForChips(t *testing.T) {
+	dir := t.TempDir()
+	raw := pngBytes(t, 32, color.RGBA{G: 200, A: 255})
+	url := "data:image/png;base64," + base64.StdEncoding.EncodeToString(raw)
+
+	EnsureChips(dir, []TabInfo{{FavIconURL: url}})
+	if !WaitForChips(10 * time.Second) {
+		t.Fatal("chip work did not finish within the deadline")
+	}
+	if !exists(filepath.Join(dir, iconKey(url)+"-processed.png")) {
+		t.Error("WaitForChips returned before the chip was on disk")
+	}
+	// Idempotent with nothing outstanding, so the daemon path is unaffected.
+	if !WaitForChips(time.Second) {
+		t.Error("WaitForChips should return immediately when nothing is running")
+	}
+}
+
 func TestEnsureChipsSkipsCachedAndEmpty(t *testing.T) {
 	dir := t.TempDir()
 	raw := pngBytes(t, 16, color.RGBA{A: 255})

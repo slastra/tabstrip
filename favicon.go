@@ -89,6 +89,32 @@ const (
 // referencing one uncached favicon should fetch it once.
 var inFlight sync.Map // key string -> struct{}
 
+// chipWork tracks the goroutines EnsureChips has running, so a one-shot run
+// can wait for them. The daemon never does: it is still there on the next
+// snapshot to pick up whatever landed.
+var chipWork sync.WaitGroup
+
+// WaitForChips blocks until the outstanding chip fetches finish, or until d
+// elapses. Reports whether they all finished.
+//
+// This exists for `tabstrip snapshot`, which otherwise exits the instant it
+// has written the file and takes its own unfinished fetches down with it — a
+// one-shot run warmed almost nothing, which made it useless for both cache
+// priming and hand-testing. The daemon has no use for it.
+func WaitForChips(d time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		chipWork.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(d):
+		return false
+	}
+}
+
 // EnsureChips makes sure every tab's chip exists, fetching and converting the
 // missing ones in the background. Returns immediately; callers render whatever
 // is on disk now and pick up the rest on the next snapshot.
@@ -110,7 +136,9 @@ func EnsureChips(dir string, tabs []TabInfo) {
 		if _, busy := inFlight.LoadOrStore(key, struct{}{}); busy {
 			continue
 		}
+		chipWork.Add(1)
 		go func(favicon, key string) {
+			defer chipWork.Done()
 			defer inFlight.Delete(key)
 			if err := ensureChip(dir, favicon, key); err != nil {
 				markFailed(dir, key, failTTLFor(err))

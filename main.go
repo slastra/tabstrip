@@ -48,9 +48,25 @@ func main() {
 	case "prev":
 		cycle(c, -1)
 	default:
-		if writeSnapshot(c) {
-			pokeSlots()
-		}
+		snapshotOnce(c)
+	}
+}
+
+// snapshotOnce is the one-shot refresh. Unlike the daemon it has no second
+// chance, so it waits for the chips its first pass kicked off and writes
+// again, leaving the cache warm and the snapshot pointing at real icons
+// rather than at fallbacks that were merely the state a moment ago.
+//
+// The wait is capped a little above fetchTimeout: every fetch is bounded by
+// that, so this only ever gives up on a decode pathological enough to outlast
+// it, and a debugging command must not hang.
+func snapshotOnce(c *Fleet) {
+	changed := writeSnapshot(c)
+	if !WaitForChips(fetchTimeout + time.Second) {
+		fmt.Fprintln(os.Stderr, "tabstrip: some icons were still fetching")
+	}
+	if writeSnapshot(c) || changed {
+		pokeSlots()
 	}
 }
 
