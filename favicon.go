@@ -9,9 +9,10 @@ package main
 // out — the bar used to sit on fallback chips until the user happened to open
 // the switcher.
 //
-// Everything is in-process: no ImageMagick, no exec. Go's stdlib covers
-// PNG/JPEG/GIF and x/image/webp the fourth raster format sites actually serve;
-// ICO is parsed here (see decodeICO) and SVG is rasterised with oksvg.
+// Raster formats are decoded in-process: Go's stdlib covers PNG/JPEG/GIF and
+// x/image/webp the fourth format sites actually serve; ICO is parsed here (see
+// decodeICO). SVG is the one exec — rasterised by resvg, because rendering SVG
+// the way the browser does is a browser-sized job (see decodeSVG).
 
 import (
 	"bytes"
@@ -30,13 +31,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/srwiley/oksvg"
-	"github.com/srwiley/rasterx"
 	xdraw "golang.org/x/image/draw"
 	_ "golang.org/x/image/webp"
 )
@@ -387,39 +388,134 @@ func decodeDIB(payload []byte) (image.Image, error) {
 // decodeSVG rasterises a vector favicon well above the chip size and lets
 // composeChip downsample, so small viewBoxes stay crisp.
 //
-// oksvg reads presentation attributes and inline style="" but does not apply
-// CSS from a <style> block, so an icon that themes itself that way renders
-// with default fills rather than its declared ones.
+// This shells out to resvg, the one exception to the no-exec rule. It replaced
+// oksvg, which ignored CSS in <style> blocks — the way modern SVG favicons
+// declare their fills — so their every shape fell back to SVG's default fill
+// and rendered as a black blob. resvg applies the CSS (and gradients, and
+// embedded <image>s), which is the difference between drawing an SVG and
+// drawing it the way the browser did.
+//
+// resvg takes stdin but insists on writing to a file, hence the temp path.
+// --resources-dir only anchors relative hrefs (and silences the stdin
+// warning); favicons don't have any.
 func decodeSVG(data []byte) (image.Image, error) {
-	icon, err := oksvg.ReadIconStream(bytes.NewReader(data), oksvg.WarnErrorMode)
+	out, err := os.CreateTemp("", "tabstrip-svg-*.png")
 	if err != nil {
 		return nil, err
 	}
-	icon.SetTarget(0, 0, float64(svgRaster), float64(svgRaster))
+	outPath := out.Name()
+	out.Close()
+	defer os.Remove(outPath)
 
-	img := image.NewRGBA(image.Rect(0, 0, svgRaster, svgRaster))
-	scanner := rasterx.NewScannerGV(svgRaster, svgRaster, img, img.Bounds())
-	icon.Draw(rasterx.NewDasher(svgRaster, svgRaster, scanner), 1.0)
-	return img, nil
+	ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
+	defer cancel()
+	size := strconv.Itoa(svgRaster)
+	cmd := exec.CommandContext(ctx, "resvg",
+		"--width", size, "--height", size,
+		"--resources-dir", os.TempDir(),
+		"-", outPath)
+	cmd.Stdin = bytes.NewReader(data)
+	if msg, err := cmd.CombinedOutput(); err != nil {
+		if errors.Is(err, exec.ErrNotFound) {
+			return nil, transientErr{err} // resvg not installed (yet); don't condemn the icon
+		}
+		return nil, fmt.Errorf("resvg: %w: %s", err, bytes.TrimSpace(msg))
+	}
+
+	f, err := os.Open(outPath)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return png.Decode(f)
 }
 
 // --- compose ---------------------------------------------------------------
 
+// valueFloor is the brightness, out of 255, that the darkest pixels of a
+// transparent icon are raised to. The chips sit on a near-black bar, so a
+// black-on-nothing wordmark is invisible without this; the floor is what makes
+// it read, and it is the one number to turn if chips look too washed or too dim.
+const valueFloor = 160
+
+// selfGrounded is the opaque fraction above which an icon counts as carrying
+// its own background.
+const selfGrounded = 0.9
+
 // composeChip fits the icon into the chip box, rounds its corners, and centres
 // it on a transparent canvas. The icon is squared first so the rounding lands
 // on its real edges rather than on whatever aspect it happened to have.
+//
+// Alpha is never painted over: whatever the favicon left transparent stays
+// transparent. Legibility on the dark bar is handled by lifting the icon's own
+// dark pixels instead — see liftDark.
 func composeChip(src image.Image) image.Image {
 	inner := iconSize - chipInset*2
 
 	square := image.NewRGBA(image.Rect(0, 0, inner, inner))
-	xdraw.CatmullRom.Scale(square, fit(src.Bounds(), inner), src, src.Bounds(), draw.Over, nil)
+	area := fit(src.Bounds(), inner)
+	xdraw.CatmullRom.Scale(square, area, src, src.Bounds(), draw.Over, nil)
+	liftDark(square, area)
 
+	mask := roundedMask(inner, chipRadius)
 	rounded := image.NewRGBA(square.Bounds())
-	draw.DrawMask(rounded, square.Bounds(), square, image.Point{}, roundedMask(inner, chipRadius), image.Point{}, draw.Over)
+	draw.DrawMask(rounded, square.Bounds(), square, image.Point{}, mask, image.Point{}, draw.Over)
 
 	chip := image.NewRGBA(image.Rect(0, 0, iconSize, iconSize))
 	draw.Draw(chip, image.Rect(chipInset, chipInset, chipInset+inner, chipInset+inner), rounded, image.Point{}, draw.Over)
 	return chip
+}
+
+// liftDark raises the icon's darkest pixels to valueFloor, in place, so a dark
+// icon reads against a dark bar without a plate being invented behind it.
+//
+// Brightness is max(r,g,b), not Rec.709 luminance: luminance calls saturated
+// red dark and would bleach the YouTube chip, while max(r,g,b) correctly reads
+// pure red as fully bright and leaves it alone. The lift is added equally to
+// all three channels, which holds hue and only pulls saturation out of pixels
+// that were nearly colourless to begin with.
+//
+// Icons that fill their box with opaque pixels are skipped entirely: they
+// supply their own background, so the bar's never shows through and their
+// contrast is already whatever the designer intended.
+func liftDark(img *image.RGBA, area image.Rectangle) {
+	var opaque, total int
+	for y := area.Min.Y; y < area.Max.Y; y++ {
+		for x := area.Min.X; x < area.Max.X; x++ {
+			total++
+			if img.RGBAAt(x, y).A > 250 {
+				opaque++
+			}
+		}
+	}
+	if total == 0 || float64(opaque)/float64(total) > selfGrounded {
+		return
+	}
+
+	for y := area.Min.Y; y < area.Max.Y; y++ {
+		for x := area.Min.X; x < area.Max.X; x++ {
+			p := img.RGBAAt(x, y)
+			if p.A == 0 {
+				continue
+			}
+			// Stored premultiplied; work in straight colour and put it back.
+			a := uint32(p.A)
+			r := uint32(p.R) * 255 / a
+			g := uint32(p.G) * 255 / a
+			b := uint32(p.B) * 255 / a
+			v := max(r, max(g, b))
+			if v >= valueFloor {
+				continue
+			}
+			d := uint32(valueFloor) - v
+			img.SetRGBA(x, y, color.RGBA{
+				R: uint8(min(255, r+d) * a / 255),
+				G: uint8(min(255, g+d) * a / 255),
+				B: uint8(min(255, b+d) * a / 255),
+				A: p.A,
+			})
+		}
+	}
 }
 
 // fit returns the largest centred box of the given side that preserves aspect.

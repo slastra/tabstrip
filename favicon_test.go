@@ -175,11 +175,12 @@ func TestComposeChipGeometry(t *testing.T) {
 }
 
 // A wide source must keep its aspect rather than being squashed to square.
+// The source is light so the darkness plate stays out of the letterbox check.
 func TestComposeChipPreservesAspect(t *testing.T) {
 	src := image.NewRGBA(image.Rect(0, 0, 128, 64))
 	for y := 0; y < 64; y++ {
 		for x := 0; x < 128; x++ {
-			src.SetRGBA(x, y, color.RGBA{R: 255, A: 255})
+			src.SetRGBA(x, y, color.RGBA{R: 255, G: 255, B: 255, A: 255})
 		}
 	}
 	chip := composeChip(src)
@@ -189,6 +190,54 @@ func TestComposeChipPreservesAspect(t *testing.T) {
 	}
 	if _, _, _, a := chip.At(iconSize/2, iconSize/2).RGBA(); a == 0 {
 		t.Error("centre band should carry the image")
+	}
+}
+
+// A dark icon on transparency gets its own pixels lifted, never a background
+// painted behind it; an icon that carries an opaque tile is left untouched.
+func TestComposeChipLiftsDarkIconsWithoutPlating(t *testing.T) {
+	// A narrow bar down the middle leaves transparent room either side, where
+	// a plate would show up and a lift must not.
+	bar := func(c color.RGBA) *image.RGBA {
+		src := image.NewRGBA(image.Rect(0, 0, 64, 64))
+		for y := 0; y < 64; y++ {
+			for x := 26; x < 38; x++ {
+				src.SetRGBA(x, y, c)
+			}
+		}
+		return src
+	}
+	at := func(img image.Image, x, y int) color.RGBA {
+		r, g, b, a := img.At(x, y).RGBA()
+		return color.RGBA{uint8(r >> 8), uint8(g >> 8), uint8(b >> 8), uint8(a >> 8)}
+	}
+
+	black := composeChip(bar(color.RGBA{A: 255}))
+	// Beside the stroke, transparency survives: nothing was painted in.
+	if p := at(black, iconSize/2+10, iconSize/2); p.A != 0 {
+		t.Errorf("painted a background beside the icon (alpha %d), want transparency", p.A)
+	}
+	// The stroke itself is lifted to the floor so it reads on a dark bar.
+	if p := at(black, iconSize/2, iconSize/2); p.R < valueFloor-2 {
+		t.Errorf("dark stroke not lifted: got %d, want >= %d", p.R, valueFloor)
+	}
+
+	// Saturated red is fully bright by max(r,g,b) and must survive intact —
+	// Rec.709 luminance would call it dark and bleach it.
+	red := composeChip(bar(color.RGBA{R: 255, A: 255}))
+	if p := at(red, iconSize/2, iconSize/2); p.R < 250 || p.G > 5 || p.B > 5 {
+		t.Errorf("saturated red was altered: got %v, want pure red", p)
+	}
+
+	// A fully opaque dark tile grounds itself; leave its colour alone.
+	tile := image.NewRGBA(image.Rect(0, 0, 64, 64))
+	for y := 0; y < 64; y++ {
+		for x := 0; x < 64; x++ {
+			tile.SetRGBA(x, y, color.RGBA{R: 10, G: 10, B: 10, A: 255})
+		}
+	}
+	if p := at(composeChip(tile), iconSize/2, iconSize/2); p.R > 20 {
+		t.Errorf("opaque tile was lifted: got %d, want it left dark", p.R)
 	}
 }
 
