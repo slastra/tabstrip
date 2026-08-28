@@ -10,7 +10,7 @@ therefore a tab you can currently see, and the strip stays populated while a
 terminal or an editor has focus. Windows are ordered by screen position. Tabs
 are ordered by tab-bar position.
 
-Built for Hyprland. One Go binary. No runtime dependencies beyond tabctl.
+Built for Hyprland. One Go binary, plus `resvg` for SVG favicons.
 
 ## How it works
 
@@ -33,6 +33,10 @@ debounce.
   extension supplies `favIconUrl`. Run `tabctl status` to see both versions.
 - waybar
 - Hyprland. Workspace and window queries use its IPC sockets.
+- [resvg](https://github.com/linebender/resvg), to rasterise SVG favicons.
+  Optional: without it SVG icons fall back to the browser chip and everything
+  else still works. Go's image decoders cover the raster formats in-process.
+  On Arch, `pacman -S resvg`.
 
 ## Install
 
