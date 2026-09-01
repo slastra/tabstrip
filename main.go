@@ -37,6 +37,19 @@ func main() {
 	switch mode {
 	case "daemon":
 		daemon(c)
+	case "list":
+		// Every tab across every browser and workspace, with chip paths —
+		// for lastshell's tab switcher. The daemon's snapshot stays
+		// workspace-filtered by design (the bar shows what you can see);
+		// the modal is the global view.
+		listAll(c)
+	case "activate":
+		if len(os.Args) > 2 {
+			if err := c.Activate(os.Args[2]); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+		}
 	case "goto":
 		if len(os.Args) > 2 {
 			if n, err := strconv.Atoi(os.Args[2]); err == nil {
