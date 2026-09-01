@@ -45,9 +45,25 @@ func main() {
 		listAll(c)
 	case "activate":
 		if len(os.Args) > 2 {
-			if err := c.Activate(os.Args[2]); err != nil {
+			id := os.Args[2]
+			// Resolve the tab first: its title is what the window will be
+			// renamed to, which is how we find the window to focus.
+			var target *Tab
+			for _, t := range c.ListAll() {
+				if t.ID(t.Browser) == id {
+					tt := t
+					target = &tt
+					break
+				}
+			}
+			if err := c.Activate(id); err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(1)
+			}
+			// Follow across workspaces: activating a tab in another
+			// workspace's window is useless if you aren't taken there.
+			if target != nil {
+				focusWindowOfTab(target.Browser, target.Title)
 			}
 		}
 	case "goto":

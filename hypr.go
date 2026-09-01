@@ -2,10 +2,12 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -97,4 +99,62 @@ func clientsOnActiveWorkspace() []HyprClient {
 		return on[i].At[1] < on[j].At[1]
 	})
 	return on
+}
+
+// hyprDispatch issues a dispatcher on the request socket and discards the
+// reply. The Lua-config Hyprland parses dispatch arguments as Lua, so
+// callers pass the hl.dsp form, e.g.
+//   hl.dsp.focus({ window = "address:0x..." })
+func hyprDispatch(lua string) error {
+	conn, err := net.DialTimeout("unix", filepath.Join(hyprDir(), ".socket.sock"), 2*time.Second)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(2 * time.Second))
+	if _, err := conn.Write([]byte("dispatch " + lua)); err != nil {
+		return err
+	}
+	buf := make([]byte, 256)
+	conn.Read(buf)
+	return nil
+}
+
+// focusWindowOfTab brings the Hyprland window showing the given tab to the
+// front, workspace switch included. The freshly activated tab drives its
+// window's title, so we poll briefly for a client whose stripped title
+// matches, then focus by address. Best effort: a title that never appears
+// (miniature race, unusual title mangling) just means no focus jump.
+func focusWindowOfTab(browser, tabTitle string) {
+	classFrag := strings.ToLower(browser)
+	if classFrag == "chrome" {
+		classFrag = "chrom" // google-chrome, chromium
+	}
+	for attempt := 0; attempt < 6; attempt++ {
+		var all []struct {
+			Class   string `json:"class"`
+			Title   string `json:"title"`
+			Address string `json:"address"`
+		}
+		if err := hyprRequest("j/clients", &all); err != nil {
+			return
+		}
+		for _, c := range all {
+			if !strings.Contains(strings.ToLower(c.Class), classFrag) {
+				continue
+			}
+			page := c.Title
+			for _, suffix := range windowTitleSuffixes {
+				if i := strings.LastIndex(page, suffix); i >= 0 {
+					page = page[:i]
+					break
+				}
+			}
+			if page == tabTitle {
+				hyprDispatch(fmt.Sprintf("hl.dsp.focus({ window = %q })", "address:"+c.Address))
+				return
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
