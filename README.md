@@ -51,9 +51,16 @@ Or clone the repository and run `go build`.
 ```
 tabstrip daemon    run persistently, spawned by a hidden waybar module
 tabstrip snapshot  one-shot refresh (debugging; default)
-tabstrip goto N    activate the Nth displayed tab
-tabstrip next      cycle to the next tab
-tabstrip prev      cycle to the previous tab
+tabstrip goto N       activate the Nth displayed tab
+tabstrip next         cycle to the next tab
+tabstrip prev         cycle to the previous tab
+tabstrip list         all tabs across every browser window, as JSON —
+                      id, title, chip path, windowId, active, browser.
+                      Unlike the daemon's snapshot (deliberately filtered
+                      to the focused workspace), this is the global view,
+                      for building a tab switcher.
+tabstrip activate ID  activate a tab anywhere by its "<browser>.<win>.<tab>"
+                      id, routed to the mediator that owns it
 ```
 
 ## Waybar wiring
