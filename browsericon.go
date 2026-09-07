@@ -14,16 +14,32 @@ import (
 	"sync"
 )
 
-// browserIconNames maps a tabctl browser name to its freedesktop icon name.
-// An unknown browser falls through to its own lowercased name, which is right
-// often enough to be worth trying before giving up.
-var browserIconNames = map[string]string{
-	"firefox":  "firefox",
-	"zen":      "zen-browser",
-	"chrome":   "google-chrome",
-	"chromium": "chromium",
-	"brave":    "brave-browser",
-	"helium":   "helium-browser",
+// browserIconNames maps a tabctl browser key to the freedesktop icon names to
+// try, in order. An unknown browser falls through to its own lowercased name,
+// which is right often enough to be worth trying before giving up.
+//
+// Brave installs its release channels side by side, and tabctl gives each one
+// its own key ("bravebeta", "braveorigin"), so each needs its own entry or the
+// chip falls back to the blank square. Only "brave-origin" is confirmed on
+// this machine; the channel names follow Brave's own packaging convention and
+// are listed with the shorter form as a second candidate, since a miss is
+// silent and costs a real icon.
+var browserIconNames = map[string][]string{
+	"firefox":  {"firefox"},
+	"zen":      {"zen-browser"},
+	"chrome":   {"google-chrome"},
+	"chromium": {"chromium"},
+	"helium":   {"helium-browser"},
+
+	"brave":            {"brave-browser", "brave"},
+	"bravebeta":        {"brave-browser-beta", "brave-beta"},
+	"bravenightly":     {"brave-browser-nightly", "brave-nightly"},
+	"bravedevelopment": {"brave-browser-dev", "brave-dev", "brave-browser-development"},
+
+	"braveorigin":            {"brave-origin"},
+	"braveoriginbeta":        {"brave-origin-beta", "brave-origin"},
+	"braveoriginnightly":     {"brave-origin-nightly", "brave-origin"},
+	"braveorigindevelopment": {"brave-origin-dev", "brave-origin-development", "brave-origin"},
 }
 
 // iconSearchDirs are the freedesktop locations to try, largest first so the
@@ -81,12 +97,15 @@ func EnsureBrowserChip(dir, browser string) {
 // inheritance, index.theme parsing) buys nothing here: browsers install into
 // hicolor or pixmaps under a predictable name.
 func resolveBrowserIcon(base string) string {
-	name, ok := browserIconNames[base]
+	names, ok := browserIconNames[base]
 	if !ok {
-		name = base
+		names = []string{base}
 	}
 	home, _ := os.UserHomeDir()
 
+	// Directory order carries the size preference, so it stays the outer loop:
+	// a themed 256px icon for the second-choice name beats a 48px one for the
+	// first.
 	for _, dir := range iconSearchDirs {
 		if strings.HasPrefix(dir, "~/") {
 			if home == "" {
@@ -94,9 +113,11 @@ func resolveBrowserIcon(base string) string {
 			}
 			dir = filepath.Join(home, dir[2:])
 		}
-		for _, ext := range []string{".png", ".svg"} {
-			if p := filepath.Join(dir, name+ext); exists(p) {
-				return p
+		for _, name := range names {
+			for _, ext := range []string{".png", ".svg"} {
+				if p := filepath.Join(dir, name+ext); exists(p) {
+					return p
+				}
 			}
 		}
 	}
