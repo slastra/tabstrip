@@ -138,8 +138,13 @@ func replacePriorInstance() {
 	os.WriteFile(pidfile, []byte(strconv.Itoa(os.Getpid())), 0o644)
 }
 
+// recency is the daemon's tab-touch log; nil in one-shot modes, which
+// leave it to the daemon so the file has a single writer.
+var recency *Recency
+
 func daemon(c *Fleet) {
 	replacePriorInstance()
+	recency = loadRecency()
 
 	// Hidden waybar module expects one line of module JSON.
 	fmt.Println(`{"text": ""}`)

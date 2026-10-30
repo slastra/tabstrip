@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 const (
@@ -164,6 +165,20 @@ func focusedWindow(tabs []Tab) (winKey, bool) {
 	return winKey{}, false
 }
 
+// focusedTab is the ID of the active tab in the focused browser window, or
+// "" when focus is elsewhere.
+func focusedTab(tabs []Tab, focused winKey, hasFocus bool) string {
+	if !hasFocus {
+		return ""
+	}
+	for _, t := range tabs {
+		if t.Active && (winKey{Browser: t.Browser, WindowID: t.WindowID}) == focused {
+			return t.ID(t.Browser)
+		}
+	}
+	return ""
+}
+
 // windowForTitle maps one Hyprland window title back to a tabctl window ID.
 func windowForTitle(tabs []Tab, title string) (int32, bool) {
 	// Browsers append their own name to the window title: Firefox uses
@@ -276,6 +291,9 @@ func writeSnapshot(f *Fleet) bool {
 	// everything dim would be the common case, since a terminal or editor
 	// usually has focus while you glance at the bar.
 	focused, hasFocus := focusedWindow(tabs)
+	if recency != nil {
+		recency.Observe(tabs, focusedTab(tabs, focused, hasFocus), time.Now())
+	}
 
 	cap := charBudget / max(1, len(shown))
 	cap = min(titleMax, max(titleMin, cap))
