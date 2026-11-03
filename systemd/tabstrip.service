@@ -1,0 +1,15 @@
+[Unit]
+Description=tabstrip: browser tab snapshot for the bar
+# Starts and stops with the graphical session (a compositor that starts
+# graphical-session.target, as Hyprland does via hyprland-session.target).
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+# Where you installed it: `go install` puts it in ~/go/bin.
+ExecStart=%h/.local/bin/tabstrip daemon
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target

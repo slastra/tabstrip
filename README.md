@@ -57,8 +57,17 @@ takes you to whichever window owns the tab.
 
 ### Running the daemon
 
-Start the daemon once per session. The simplest place is the compositor's
-autostart, which keeps it independent of whichever bar you run:
+Start the daemon once per session. With a compositor that starts
+`graphical-session.target` (Hyprland does, through `hyprland-session.target`),
+the bundled unit ties it to the session and restarts it if it fails:
+
+```sh
+cp systemd/tabstrip.service ~/.config/systemd/user/   # edit ExecStart to your install path
+systemctl --user enable --now tabstrip
+```
+
+Otherwise use the compositor's autostart, which keeps it independent of
+whichever bar you run:
 
 ```lua
 -- hyprland.lua
