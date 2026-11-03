@@ -35,6 +35,9 @@ func main() {
 	}
 
 	switch mode {
+	case "version", "-version", "--version":
+		fmt.Println(version())
+		return
 	case "daemon":
 		daemon(c)
 	case "list":

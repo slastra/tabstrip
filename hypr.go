@@ -104,7 +104,8 @@ func clientsOnActiveWorkspace() []HyprClient {
 // hyprDispatch issues a dispatcher on the request socket and discards the
 // reply. The Lua-config Hyprland parses dispatch arguments as Lua, so
 // callers pass the hl.dsp form, e.g.
-//   hl.dsp.focus({ window = "address:0x..." })
+//
+//	hl.dsp.focus({ window = "address:0x..." })
 func hyprDispatch(lua string) error {
 	conn, err := net.DialTimeout("unix", filepath.Join(hyprDir(), ".socket.sock"), 2*time.Second)
 	if err != nil {
