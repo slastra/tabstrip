@@ -9,6 +9,9 @@
 //	tabstrip snapshot  one-shot refresh (debugging; default)
 //	tabstrip goto N    activate the Nth displayed tab (slot click binding)
 //	tabstrip next|prev cycle the active tab (scroll bindings)
+//	tabstrip list      every tab in every browser, as JSON (tab switcher)
+//	tabstrip activate ID | close ID
+//	                   act on one of those tabs by its composed id
 package main
 
 import (
@@ -67,6 +70,15 @@ func main() {
 			// workspace's window is useless if you aren't taken there.
 			if target != nil {
 				focusWindowOfTab(target.Browser, target.Title)
+			}
+		}
+	case "close":
+		// For the switcher's Delete key. The browser picks the next active
+		// tab itself; the daemon hears about it through TabsUpdated.
+		if len(os.Args) > 2 {
+			if err := c.Close(os.Args[2]); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
 			}
 		}
 	case "goto":

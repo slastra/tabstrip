@@ -122,23 +122,52 @@ func (f *Fleet) ListAll() []Tab {
 	return all
 }
 
-// Activate routes a composed "<browser>.<window>.<tab>" ID back to the
-// mediator that owns it.
-func (f *Fleet) Activate(id string) error {
-	parts := strings.Split(id, ".")
-	if len(parts) != 3 {
-		return fmt.Errorf("malformed tab id %q", id)
-	}
-	tabID, err := strconv.Atoi(parts[2])
+// route resolves a composed "<browser>.<window>.<tab>" ID to the mediator
+// that owns it and the browser's own tab id.
+func (f *Fleet) route(id string) (*TabCtl, int32, error) {
+	browser, tabID, err := parseTabID(id)
 	if err != nil {
-		return fmt.Errorf("malformed tab id %q", id)
+		return nil, 0, err
 	}
 	for _, b := range f.Browsers() {
-		if strings.EqualFold(b, parts[0]) {
-			return f.client(b).ActivateTab(int32(tabID))
+		if strings.EqualFold(b, browser) {
+			return f.client(b), tabID, nil
 		}
 	}
-	return fmt.Errorf("no connected browser for %q", parts[0])
+	return nil, 0, fmt.Errorf("no connected browser for %q", browser)
+}
+
+// parseTabID splits a composed ID into its browser name and tab id. The
+// window id in the middle is informational: browsers address tabs by tab id
+// alone.
+func parseTabID(id string) (browser string, tabID int32, err error) {
+	parts := strings.Split(id, ".")
+	if len(parts) != 3 || parts[0] == "" {
+		return "", 0, fmt.Errorf("malformed tab id %q", id)
+	}
+	n, err := strconv.ParseInt(parts[2], 10, 32)
+	if err != nil {
+		return "", 0, fmt.Errorf("malformed tab id %q", id)
+	}
+	return parts[0], int32(n), nil
+}
+
+// Activate routes a composed ID back to the mediator that owns it.
+func (f *Fleet) Activate(id string) error {
+	c, tabID, err := f.route(id)
+	if err != nil {
+		return err
+	}
+	return c.ActivateTab(tabID)
+}
+
+// Close closes one tab by its composed ID.
+func (f *Fleet) Close(id string) error {
+	c, tabID, err := f.route(id)
+	if err != nil {
+		return err
+	}
+	return c.CloseTabs([]int32{tabID})
 }
 
 // SubscribeTabsUpdated matches on interface and member, not sender, so one
@@ -174,6 +203,12 @@ func (c *TabCtl) ActivateTab(tabID int32) error {
 	ctx, cancel := context.WithTimeout(context.Background(), dbusCallTimeout)
 	defer cancel()
 	return c.obj().CallWithContext(ctx, dbusInterface+".ActivateTab", 0, tabID, true).Err
+}
+
+func (c *TabCtl) CloseTabs(tabIDs []int32) error {
+	ctx, cancel := context.WithTimeout(context.Background(), dbusCallTimeout)
+	defer cancel()
+	return c.obj().CallWithContext(ctx, dbusInterface+".CloseTabs", 0, tabIDs).Err
 }
 
 // SubscribeTabsUpdated registers interest in tabctl's TabsUpdated signal

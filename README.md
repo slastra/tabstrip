@@ -44,6 +44,7 @@ tabstrip prev         cycle to the previous tab
 tabstrip list         every tab in every browser window, as JSON
 tabstrip activate ID  activate a tab anywhere by its "<browser>.<win>.<tab>"
                       id, and follow it to its workspace
+tabstrip close ID     close a tab anywhere by the same id
 ```
 
 Only one daemon runs at a time. A new one terminates the old one through the
@@ -52,8 +53,8 @@ snapshot.
 
 `list` is the global view. The snapshot is deliberately limited to the current
 workspace, because the strip shows what you can see. `list` covers every
-browser window on every workspace, for building a tab switcher, and `activate`
-takes you to whichever window owns the tab.
+browser window on every workspace, for building a tab switcher. `activate`
+takes you to whichever window owns the tab, and `close` closes it where it is.
 
 ### Running the daemon
 
